@@ -4,18 +4,20 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include "utils.h"
 
 // test client 
-
-// segment file into packets
+// define packet structure, segment file into packets
 struct packet {
     unsigned short seq_num;
     unsigned short ack_num;
     char last;
     char data[PAYLOAD_SIZE];
 };
+
+// define timeval structure 
 
 int main(int argc, char *argv[]) {
     int listen_sockfd, send_sockfd;
@@ -89,60 +91,65 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-    memset(&pkt, 0, sizeof(pkt)); // sets all of the bytes in pkt to 0
-    pkt.seqnum = htons(seq_num) // unsigned seq_num int into network byte
-    pkt.last = (feof(fp)) ? 1 : 0; // if end of file, set pkt.last = 1 else 0
-    memcpy(pkt.data, buffer, bytes_read);
+        memset(&pkt, 0, sizeof(pkt)); // sets all of the bytes in pkt to 0
+        pkt.seq_num = htons(seq_num); // unsigned seq_num int into network byte
+        pkt.last = (feof(fp)) ? 1 : 0; // if end of file, set pkt.last = 1 else 0
+        memcpy(pkt.data, buffer, bytes_read);
 
-    // send packet
-    if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
-    perror("Error sending packet");
-    break;
-    }   
+        // send packet
+        if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
+        perror("Error sending packet");
+        break;
+        }   
 
-    // handle ACK from server
-    retry_count = 0
-    while (1) {
-        FD_ZERO(&read_fds);
-        FD_SET(listen_sockfd, &read_fds);
-        tv.tv_sec = 2;  // timeout
-        tv.tv_usec = 0;
-    }
+        // Handle ACK from server
+        int retry_count = 0;
+        fd_set read_fds; // declare file descriptor set
+        int retval;  // retval stores return of select() int
 
-    retval = select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv);
-        if (retval == -1) {
-            perror("select()");
-            break;
-        } else if (retval) {
-            if (recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size) > 0) {
-                if (ntohs(ack_pkt.ack_num) == seq_num) {
-                    // ACK received
-                    // ntohs translates unsigned int to host byte. if host byte == network byte
+        // ACK reception loop
+        while (1) {
+            FD_ZERO(&read_fds);
+            FD_SET(listen_sockfd, &read_fds);
+            tv.tv_sec = 2;  // timeout
+            tv.tv_usec = 0;
+        
+            retval = select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv);
+            if (retval == -1) {
+                perror("select() error");
+                break;
+            } else if (retval == 0) {
+                // timeout: no data within specified time
+                if (++retry_count > 3) { // Arbitrary retry limit; can changel ater
+                    printf("No ack for seq %d, stopping\n", seq_num);
                     break;
                 }
-            }
-        } else {
-            // Timeout: no data within specified time
-            if (++retry_count > 3) { // retry limit
-                printf("No ack for seq %d, stopping\n", seq_num);
-                fclose(fp);
-                close(listen_sockfd);
-                close(send_sockfd);
-                return 1;
-            }
-            printf("Timeout, resending packet seq %d\n", seq_num);
-            if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
-                perror("Error resending packet");
-                break;
+                printf("Timeout, resending packet seq %d\n", seq_num);
+                if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
+                    perror("Error resending packet");
+                    break;
+                }
+            } else {
+                if (recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size) < 0) {
+                    perror("Error receiving ACK");
+                    break;
+                }
+                if (ntohs(ack_pkt.ack_num) == seq_num) {
+                    break; // ACK received, exit loop
+                    // ntohs translates unsigned int to host byte. if host byte == network byte, ACK & file successfully received
+                }
+                // handle unexpected ACKs (e.g., if ack_num != seq_num)
+                else if (ntohs(ack_pkt.ack_num != seq_num)) {
+                    ;
+                }
             }
         }
+        seq_num++;
+        
+        fclose(fp);
+        close(listen_sockfd);
+        close(send_sockfd);
+        return 0;
     }
-    seq_num++;
-}
-    
-    fclose(fp);
-    close(listen_sockfd);
-    close(send_sockfd);
-    return 0;
 }
 
