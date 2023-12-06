@@ -7,7 +7,15 @@
 
 #include "utils.h"
 
-// test client comment
+// test client 
+
+// segment file into packets
+struct packet {
+    unsigned short seq_num;
+    unsigned short ack_num;
+    char last;
+    char data[PAYLOAD_SIZE];
+};
 
 int main(int argc, char *argv[]) {
     int listen_sockfd, send_sockfd;
@@ -73,7 +81,64 @@ int main(int argc, char *argv[]) {
 
     // TODO: Read from file, and initiate reliable data transfer to the server
 
- 
+    // read file loop
+    while (!feof(fp)) {
+        size_t bytes_read = fread(buffer, 1, PAYLOAD_SIZE, fp);
+        if (bytes_read < 0) {
+            perror("Error reading file");
+            break;
+        }
+
+    memset(&pkt, 0, sizeof(pkt)); // sets all of the bytes in pkt to 0
+    pkt.seqnum = htons(seq_num) // unsigned seq_num int into network byte
+    pkt.last = (feof(fp)) ? 1 : 0; // if end of file, set pkt.last = 1 else 0
+    memcpy(pkt.data, buffer, bytes_read);
+
+    // send packet
+    if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
+    perror("Error sending packet");
+    break;
+    }   
+
+    // handle ACK from server
+    retry_count = 0
+    while (1) {
+        FD_ZERO(&read_fds);
+        FD_SET(listen_sockfd, &read_fds);
+        tv.tv_sec = 2;  // timeout
+        tv.tv_usec = 0;
+    }
+
+    retval = select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv);
+        if (retval == -1) {
+            perror("select()");
+            break;
+        } else if (retval) {
+            if (recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size) > 0) {
+                if (ntohs(ack_pkt.ack_num) == seq_num) {
+                    // ACK received
+                    // ntohs translates unsigned int to host byte. if host byte == network byte
+                    break;
+                }
+            }
+        } else {
+            // Timeout: no data within specified time
+            if (++retry_count > 3) { // retry limit
+                printf("No ack for seq %d, stopping\n", seq_num);
+                fclose(fp);
+                close(listen_sockfd);
+                close(send_sockfd);
+                return 1;
+            }
+            printf("Timeout, resending packet seq %d\n", seq_num);
+            if (sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size) < 0) {
+                perror("Error resending packet");
+                break;
+            }
+        }
+    }
+    seq_num++;
+}
     
     fclose(fp);
     close(listen_sockfd);
