@@ -7,6 +7,7 @@
 
 #include "utils.h"
 
+// test client comment
 
 int main(int argc, char *argv[]) {
     int listen_sockfd, send_sockfd;
