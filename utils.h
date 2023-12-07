@@ -14,7 +14,7 @@ const int SERVER_PORT = 6002;
 const int CLIENT_PORT_TO = 5001;
 const int PAYLOAD_SIZE = 1024;
 const int WINDOW_SIZE = 5;
-const int TIMEOUT = 2;
+const int TIMEOUT = 0;
 const int MAX_SEQUENCE = 1024;
 
 // Packet Layout

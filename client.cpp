@@ -79,13 +79,17 @@ int main(int argc, char *argv[]) {
 
         ack_received = false;
         retry_count = 0;
-        while (!ack_received && retry_count < 100) {
+        while (!ack_received && retry_count < 10000) {
             sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-            printSend(&pkt, 0);
+            if(retry_count > 0){
+                printSend(&pkt, 1);
+            }else{
+                printSend(&pkt, 0);
+            }
             FD_ZERO(&read_fds);
             FD_SET(listen_sockfd, &read_fds);
             tv.tv_sec = TIMEOUT;
-            tv.tv_usec = 0;
+            tv.tv_usec = 40000;
 
             if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
                 recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
