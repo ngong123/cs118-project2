@@ -14,7 +14,7 @@ const int SERVER_PORT = 6002;
 const int CLIENT_PORT_TO = 5001;
 const int PAYLOAD_SIZE = 1024;
 const int WINDOW_SIZE = 5;
-const int TIMEOUT = 0;
+const int TIMEOUT = 1;
 const int MAX_SEQUENCE = 1024;
 
 // Packet Layout
@@ -36,6 +36,14 @@ void build_packet(packet* pkt, unsigned short seqnum, unsigned short acknum, cha
     pkt->length = length;
     std::memcpy(pkt->payload, payload, length);
 }
+
+// // nathan: congestion window layout
+// struct cwnd {
+//     int cwndLength;
+//     int startIndex;
+//     int* acked;
+//     int* timer;
+// }
 
 // Utility function to print a packet
 void printRecv(const packet* pkt) {

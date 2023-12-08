@@ -4,6 +4,8 @@
 #include <cstring>
 #include <unistd.h>
 #include <sys/time.h>
+#include <time.h>
+#include <algorithm>
 
 #include "utils.h"
 
@@ -72,41 +74,75 @@ int main(int argc, char *argv[]) {
     bool ack_received;
     int retry_count;
     
+    // nathan: SR and AIMD variables
+    const int MAX_CWND = 1024;
+    int cwnd = 1;
+    int ssthresh = 64; // initial cwnd, initial slow start threshold
+    bool acked[MAX_SEQUENCE] = {false};
+    struct timespec send_time[MAX_SEQUENCE];
+    struct timespec current_time;
+    int window_base = 0;
+    bool slowStart = true;
+
+    // nathan: init cwnd, send packets in cwnd
     while (!feof(fp)) {
-        size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
-        bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-        build_packet(&pkt, seq_num, 0, last_packet, 0, read_bytes, buffer);
-
-        ack_received = false;
-        retry_count = 0;
-        while (!ack_received && retry_count < 10000) {
-            sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-            if(retry_count > 0){
-                printSend(&pkt, 1);
-            }else{
+        // send packets in the congestion window
+        for (int i = window_base; i < window_base + cwnd && i < MAX_SEQUENCE; i++) {
+            if (!acked[i]) {
+                size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
+                bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+                build_packet(&pkt, i, 0, last_packet, 0, read_bytes, buffer);
+                sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
                 printSend(&pkt, 0);
+                clock_gettime(CLOCK_MONOTONIC, &send_time[i]);
+                acked[i] = false;
             }
-            FD_ZERO(&read_fds);
-            FD_SET(listen_sockfd, &read_fds);
-            tv.tv_sec = TIMEOUT;
-            tv.tv_usec = 40000;
+        }
 
-            if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
-                recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
-                if (ack_pkt.ack && ack_pkt.acknum == seq_num) {
-                    ack_received = true;
+        // nathan: check for ACKs
+        FD_ZERO(&read_fds);
+        FD_SET(listen_sockfd, &read_fds);
+        tv.tv_sec = TIMEOUT;
+        tv.tv_usec = 40000;
+
+        if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
+            recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
+            if (ack_pkt.ack && ack_pkt.acknum >= window_base && ack_pkt.acknum < MAX_SEQUENCE) {
+                acked[ack_pkt.acknum] = true;
+                while (window_base < MAX_SEQUENCE && acked[window_base]) { // update windows base
+                    window_base++;
                 }
-            } else {
-                retry_count++;
             }
         }
-
-        if (!ack_received) {
-            std::printf("Failed to receive ACK for packet %d\n", seq_num);
-            break; // Exit if ACK not received after MAX_RETRIES
+    // nathan: check for timeouts and retransmit
+    clock_gettime(CLOCK_MONOTONIC, &current_time);
+    for (int i = window_base; i < seq_num; i++) {
+        if (!acked[i]) {
+            double time_diff = (current_time.tv_sec - send_time[i].tv_sec) * 1000.0;
+            time_diff += (current_time.tv_nsec - send_time[i].tv_nsec) / 1000000.0;
+            if (time_diff > TIMEOUT) {
+                // retransmit logic and resend the packet at position 1
+                // Adjust cwnd and ssthresh
+                ssthresh = std::max(1, cwnd / 2);
+                cwnd = 1;
+                slowStart = true;
+                break;
+            }
         }
+    }
 
-        seq_num = (seq_num + 1) % MAX_SEQUENCE;
+    // nathan: implementing AIMD congestion control
+    if (window_base == seq_num) {  // all packets in windows have been ACKed
+        if (slowStart) {
+            cwnd = std::min(cwnd * 2, ssthresh);
+            if (cwnd >= ssthresh) {
+                slowStart = false;
+            }
+        } else {
+            // Congestion Avoidance
+            cwnd = std::min(cwnd + 1, MAX_CWND);
+        }
+    }
     }
 
     fclose(fp);
@@ -114,4 +150,3 @@ int main(int argc, char *argv[]) {
     close(send_sockfd);
     return 0;
 }
-
