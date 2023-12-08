@@ -59,23 +59,45 @@ int main() {
     }
 
     // TODO: Receive file from the client and save it as output.txt
-    //unsigned short expected_seq_num = 0;
 
+    // nathan: cwnd & buffer variable init - for SR 
+    bool received[MAX_SEQUENCE] = {false};
+
+    // SR loop 
     while (true) {
+        ssize_t recv_len = recvfrom(listen_sockfd, &recv_pkt, sizeof(recv_pkt), 0, (struct sockaddr *)&client_addr_from, &addr_size); // length of received pkt
         if (recvfrom(listen_sockfd, &recv_pkt, sizeof(recv_pkt), 0, (struct sockaddr *)&client_addr_from, &addr_size) > 0) {
-            if (recv_pkt.seqnum == expected_seq_num && !recv_pkt.ack) {
+            if (!recv_pkt.ack) { // ignore packets that are not data packets
+                buffer[recv_pkt.seqnum] = recv_pkt;
+                received[recv_pkt.seqnum] = true;
                 printRecv(&recv_pkt);
-                fwrite(recv_pkt.payload, 1, recv_pkt.length, fp);
-                fflush(fp); // Ensure data is written to the file
-                expected_seq_num = (expected_seq_num + 1) % MAX_SEQUENCE;
             }
 
+            // Sending ACK for every packet received
             build_packet(&ack_pkt, 0, recv_pkt.seqnum, 0, 1, 0, NULL);
             sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
 
-            if (recv_pkt.last && recv_pkt.seqnum == expected_seq_num) {
-                break;
+            // Process and write any in-order packets
+            while (received[expected_seq_num]) {
+                fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
+                fflush(fp);
+                received[expected_seq_num] = false;
+                if (buffer[expected_seq_num].last) {
+                    // last packet received, clean up and exit
+                    fclose(fp);
+                    close(listen_sockfd);
+                    close(send_sockfd);
+                    return 0;
+                }
+                expected_seq_num = (expected_seq_num + 1) % MAX_SEQUENCE;
             }
+        } else if (recv_len == 0) {
+            ;
+            // Gracefully close connection
+        } else {
+            // An error occurred
+            perror("recvfrom failed");
+            break;
         }
     }
 
