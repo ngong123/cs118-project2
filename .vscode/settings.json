@@ -1,6 +1,7 @@
 {
     "cmake.configureOnOpen": true,
     "files.associations": {
-        "time.h": "c"
+        "time.h": "c",
+        "iostream": "cpp"
     }
 }

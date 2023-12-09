@@ -14,7 +14,7 @@ const int SERVER_PORT = 6002;
 const int CLIENT_PORT_TO = 5001;
 const int PAYLOAD_SIZE = 1024;
 const int WINDOW_SIZE = 5;
-const int TIMEOUT = 1;
+const int TIMEOUT = 1; // nathan: changed timeout to 1 to test congestion control timeout in client
 const int MAX_SEQUENCE = 1024;
 
 // Packet Layout
@@ -37,7 +37,7 @@ void build_packet(packet* pkt, unsigned short seqnum, unsigned short acknum, cha
     std::memcpy(pkt->payload, payload, length);
 }
 
-// // nathan: congestion window layout
+// // nathan: possible congestion window layout
 // struct cwnd {
 //     int cwndLength;
 //     int startIndex;

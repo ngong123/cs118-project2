@@ -60,6 +60,7 @@ int main() {
 
     // TODO: Receive file from the client and save it as output.txt
 
+    // nathan: SR logic. MAX_SEQUENCE = 1024 which is the max size of the sliding window. 
     // nathan: cwnd & buffer variable init - for SR 
     bool received[MAX_SEQUENCE] = {false};
     while (true) {
@@ -73,11 +74,11 @@ int main() {
                     printRecv(&recv_pkt);
                 }
 
-                // Sending ACK for every packet received, regardless if it's a duplicate
+                // Sending ACK for every packet received regardless if it's a duplicate
                 build_packet(&ack_pkt, 0, recv_pkt.seqnum, 0, 1, 0, NULL);
                 sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
                 
-                // Process and write any in-order packets
+                // Process and write any in order packets
                 while (received[expected_seq_num]) {
                     fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
                     fflush(fp);
@@ -93,7 +94,7 @@ int main() {
                 }
             }
         } else if (recv_len == 0) {
-            // Gracefully close connection
+            // close connection
             break;
         } else {
             // An error occurred

@@ -85,63 +85,40 @@ int main(int argc, char *argv[]) {
     bool retransmit[MAX_SEQUENCE] = {false};
     int ack_count[MAX_SEQUENCE] = {0};
 
-    // nathan: init cwnd, send packets in cwnd
-    // while (!feof(fp) || window_base < seq_num) {
-    //     // send packets in the congestion window
-    //     for (int i = window_base; i < window_base + cwnd && i < seq_num + MAX_SEQUENCE; i++) {
-    //         int wrapped_i = i % MAX_SEQUENCE;
-    //         if (!acked[wrapped_i]) {
-    //             if (retransmit[wrapped_i]) {  // Retransmission logic
-    //                 // Logic to resend the packet at position wrapped_i
-    //                 // Ensure that the packet data is still valid for retransmission
-    //                 // ...
-    //                 printSend(&pkt, 1);  // Indicate retransmission
-    //                 retransmit[wrapped_i] = false;  // Reset retransmit flag
-    //             } else if (i < seq_num) {
-    //                 // Do nothing, already sent and waiting for ACK
-    //             } else {
-    //                 size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
-    //                 bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-    //                 build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
-    //                 sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-    //                 printSend(&pkt, 0);
-    //                 clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
-    //                 acked[wrapped_i] = false;
-    //                 seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number
-    //             }
-    //         }
-    //     }
 
-    while (!feof(fp)) {
-    // send packets in the congestion window
-    for (int i = window_base; i != (window_base + cwnd) % MAX_SEQUENCE; i = (i + 1) % MAX_SEQUENCE) {
-        int wrapped_i = i % MAX_SEQUENCE;
-        if (!acked[wrapped_i]) {
-            if (retransmit[wrapped_i]) {  // Retransmission logic
-                // Resend the packet
-                fseek(fp, wrapped_i * PAYLOAD_SIZE, SEEK_SET); // Move the file pointer to the start of the missed packet
-                size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp); // Read the packet data again
-                bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-                build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
-                sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-                printSend(&pkt, 1);  // Indicate retransmission
-                clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]); // Reset the timer for this packet
+    while (!feof(fp) || window_base != seq_num) {
+    // FOR LOOP 1: PACKET SENDING LOOP
+    // sending new packets and handling packet retransmissions in cwnd
+    // in each iteration, it checks whether a packet neetds to be sent or retransmitted. for new packtes, it reads data from the file, constructs a packet, and sends it. otherwise, it resenhds
+    // index i keeps track of the current position of the sending cwnd. 
+        for (int i = window_base; i != (window_base + cwnd) % MAX_SEQUENCE; i = (i + 1) % MAX_SEQUENCE) {
+            int wrapped_i = i % MAX_SEQUENCE;
+            if (!acked[wrapped_i]) {
+                if (retransmit[wrapped_i]) {
+                    // Resend the packet
+                    fseek(fp, wrapped_i * PAYLOAD_SIZE, SEEK_SET); // Move the file pointer to the start of the missed packet
+                    size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp); // Read the packet data again
+                    bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+                    build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
+                    sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+                    printSend(&pkt, 1);  // Indicate retransmission
+                    clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]); // Reset the timer for this packet
 
-                retransmit[wrapped_i] = false;  // Reset retransmit flag
-            } else if (i != seq_num) {
-                // Do nothing, already sent and waiting for ACK
-            } else {
-                size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
-                bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-                build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
-                sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-                printSend(&pkt, 0);
-                clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
-                acked[wrapped_i] = false;
-                seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number
+                    retransmit[wrapped_i] = false;  // Reset retransmit flag
+                } else if (i != seq_num) {
+                    // Do nothing, already sent and waiting for ACK
+                } else {
+                    size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
+                    bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+                    build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
+                    sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+                    printSend(&pkt, 0);
+                    clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
+                    acked[wrapped_i] = false;
+                    seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number. manages overall sequence of packets being sent - handles wrapping logic
+                }
             }
         }
-    }
 
         // nathan: check for ACKs
         FD_ZERO(&read_fds);
@@ -174,6 +151,8 @@ int main(int argc, char *argv[]) {
 
 
         // nathan: timeout logic check for timeouts
+        // FOR LOOP 2: TIMEOUT & AIMD LOOP. 
+        // iterates over all packets from window_base to seq_num. if timeout is detected, do AIMD
         clock_gettime(CLOCK_MONOTONIC, &current_time);
         for (int i = window_base; i != seq_num; i = (i + 1) % MAX_SEQUENCE) {
             int wrapped_i = i % MAX_SEQUENCE;
