@@ -71,12 +71,10 @@ int main(int argc, char *argv[]) {
 
     // TODO: Read from file, and initiate reliable data transfer to the server
     fd_set read_fds;
-    bool ack_received;
-    int retry_count;
     
     // nathan: SR and AIMD variables
     const int MAX_CWND = 1024;
-    int cwnd = 1;
+    int cwnd = 1; // INITIAL CWND WINDOW SIZE INITIALIZED TO 1. 
     int ssthresh = 64; // initial cwnd, initial slow start threshold
     bool acked[MAX_SEQUENCE] = {false};
     struct timespec send_time[MAX_SEQUENCE];
@@ -84,20 +82,66 @@ int main(int argc, char *argv[]) {
     int window_base = 0;
     bool slowStart = true;
 
+    bool retransmit[MAX_SEQUENCE] = {false};
+    int ack_count[MAX_SEQUENCE] = {0};
+
     // nathan: init cwnd, send packets in cwnd
+    // while (!feof(fp) || window_base < seq_num) {
+    //     // send packets in the congestion window
+    //     for (int i = window_base; i < window_base + cwnd && i < seq_num + MAX_SEQUENCE; i++) {
+    //         int wrapped_i = i % MAX_SEQUENCE;
+    //         if (!acked[wrapped_i]) {
+    //             if (retransmit[wrapped_i]) {  // Retransmission logic
+    //                 // Logic to resend the packet at position wrapped_i
+    //                 // Ensure that the packet data is still valid for retransmission
+    //                 // ...
+    //                 printSend(&pkt, 1);  // Indicate retransmission
+    //                 retransmit[wrapped_i] = false;  // Reset retransmit flag
+    //             } else if (i < seq_num) {
+    //                 // Do nothing, already sent and waiting for ACK
+    //             } else {
+    //                 size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
+    //                 bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+    //                 build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
+    //                 sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+    //                 printSend(&pkt, 0);
+    //                 clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
+    //                 acked[wrapped_i] = false;
+    //                 seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number
+    //             }
+    //         }
+    //     }
+
     while (!feof(fp)) {
-        // send packets in the congestion window
-        for (int i = window_base; i < window_base + cwnd && i < MAX_SEQUENCE; i++) {
-            if (!acked[i]) {
+    // send packets in the congestion window
+    for (int i = window_base; i != (window_base + cwnd) % MAX_SEQUENCE; i = (i + 1) % MAX_SEQUENCE) {
+        int wrapped_i = i % MAX_SEQUENCE;
+        if (!acked[wrapped_i]) {
+            if (retransmit[wrapped_i]) {  // Retransmission logic
+                // Resend the packet
+                fseek(fp, wrapped_i * PAYLOAD_SIZE, SEEK_SET); // Move the file pointer to the start of the missed packet
+                size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp); // Read the packet data again
+                bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+                build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
+                sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+                printSend(&pkt, 1);  // Indicate retransmission
+                clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]); // Reset the timer for this packet
+
+                retransmit[wrapped_i] = false;  // Reset retransmit flag
+            } else if (i != seq_num) {
+                // Do nothing, already sent and waiting for ACK
+            } else {
                 size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
                 bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-                build_packet(&pkt, i, 0, last_packet, 0, read_bytes, buffer);
+                build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
                 sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
                 printSend(&pkt, 0);
-                clock_gettime(CLOCK_MONOTONIC, &send_time[i]);
-                acked[i] = false;
+                clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
+                acked[wrapped_i] = false;
+                seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number
             }
         }
+    }
 
         // nathan: check for ACKs
         FD_ZERO(&read_fds);
@@ -105,44 +149,72 @@ int main(int argc, char *argv[]) {
         tv.tv_sec = TIMEOUT;
         tv.tv_usec = 40000;
 
+        // nathan: retransmission logic of lost packets
         if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
             recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
-            if (ack_pkt.ack && ack_pkt.acknum >= window_base && ack_pkt.acknum < MAX_SEQUENCE) {
-                acked[ack_pkt.acknum] = true;
-                while (window_base < MAX_SEQUENCE && acked[window_base]) { // update windows base
-                    window_base++;
+            int ack_index = ack_pkt.acknum % MAX_SEQUENCE;
+            if (ack_pkt.ack && ack_index >= window_base && ack_index < MAX_SEQUENCE) {
+                ack_count[ack_index]++;
+                if (ack_count[ack_index] == 1) { // First ACK for this packet
+                    acked[ack_index] = true;
+                    if (ack_index == window_base) {
+                        while (window_base < MAX_SEQUENCE && acked[window_base]) { // Update window base
+                            window_base = (window_base + 1) % MAX_SEQUENCE;
+                        }
+                    }
+                // maintain ack_count. When three duplicate ACKs are received, trigger fast retransmit, and reset sstresh and cwnd
+                } else if (ack_count[ack_index] == 3) { // 3 duplicate ACKs received
+                    retransmit[ack_index] = true;
+                    // FAST RECOVERY Adjust cwnd and ssthresh for fast recovery
+                    ssthresh = std::max(1, cwnd / 2);
+                    cwnd = ssthresh + 3; // inflate the window by the number of duplicate ACKs
                 }
             }
         }
-    // nathan: check for timeouts and retransmit
-    clock_gettime(CLOCK_MONOTONIC, &current_time);
-    for (int i = window_base; i < seq_num; i++) {
-        if (!acked[i]) {
-            double time_diff = (current_time.tv_sec - send_time[i].tv_sec) * 1000.0;
-            time_diff += (current_time.tv_nsec - send_time[i].tv_nsec) / 1000000.0;
-            if (time_diff > TIMEOUT) {
-                // retransmit logic and resend the packet at position 1
-                // Adjust cwnd and ssthresh
-                ssthresh = std::max(1, cwnd / 2);
-                cwnd = 1;
-                slowStart = true;
-                break;
-            }
-        }
-    }
 
-    // nathan: implementing AIMD congestion control
-    if (window_base == seq_num) {  // all packets in windows have been ACKed
-        if (slowStart) {
-            cwnd = std::min(cwnd * 2, ssthresh);
-            if (cwnd >= ssthresh) {
-                slowStart = false;
+
+        // nathan: timeout logic check for timeouts
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        for (int i = window_base; i != seq_num; i = (i + 1) % MAX_SEQUENCE) {
+            int wrapped_i = i % MAX_SEQUENCE;
+            if (!acked[wrapped_i]) {
+                double time_diff = (current_time.tv_sec - send_time[wrapped_i].tv_sec) * 1000.0;
+                time_diff += (current_time.tv_nsec - send_time[wrapped_i].tv_nsec) / 1000000.0;
+                if (time_diff > TIMEOUT) {
+                    // mark retransmission and adjust cwnd and ssthresh
+                    retransmit[wrapped_i] = true;
+                    ssthresh = std::max(1, cwnd / 2);
+                    cwnd = 1;
+                    slowStart = true;
+
+                    // Resend the packet
+                    fseek(fp, wrapped_i * PAYLOAD_SIZE, SEEK_SET); // Move the file pointer to the start of the missed packet
+                    size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp); // Read the packet data again
+                    bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+                    build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
+                    sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+                    printSend(&pkt, 1);  // Indicate retransmission
+                    clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]); // Reset the timer for this packet
+
+                    retransmit[wrapped_i] = false;  // Reset retransmit flag after retransmission
+                    break;  // Break after handling the first timeout
+                }
             }
-        } else {
-            // Congestion Avoidance
-            cwnd = std::min(cwnd + 1, MAX_CWND);
         }
-    }
+
+
+        // nathan: implementing AIMD congestion control logic
+        if (window_base == seq_num) {  // all packets in the window have been ACKed
+            if (slowStart) {
+                cwnd = std::min(cwnd * 2, ssthresh);
+                if (cwnd >= ssthresh) {
+                    slowStart = false;
+                }
+            } else {
+                // Congestion Avoidance
+                cwnd = std::min(cwnd + 1, MAX_CWND);
+            }
+        }
     }
 
     fclose(fp);

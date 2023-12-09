@@ -62,46 +62,45 @@ int main() {
 
     // nathan: cwnd & buffer variable init - for SR 
     bool received[MAX_SEQUENCE] = {false};
-
-    // SR loop 
     while (true) {
-        ssize_t recv_len = recvfrom(listen_sockfd, &recv_pkt, sizeof(recv_pkt), 0, (struct sockaddr *)&client_addr_from, &addr_size); // length of received pkt
-        if (recvfrom(listen_sockfd, &recv_pkt, sizeof(recv_pkt), 0, (struct sockaddr *)&client_addr_from, &addr_size) > 0) {
+        ssize_t recv_len = recvfrom(listen_sockfd, &recv_pkt, sizeof(recv_pkt), 0, (struct sockaddr *)&client_addr_from, &addr_size);
+        if (recv_len > 0) {
             if (!recv_pkt.ack) { // ignore packets that are not data packets
-                buffer[recv_pkt.seqnum] = recv_pkt;
-                received[recv_pkt.seqnum] = true;
-                printRecv(&recv_pkt);
-            }
-
-            // Sending ACK for every packet received
-            build_packet(&ack_pkt, 0, recv_pkt.seqnum, 0, 1, 0, NULL);
-            sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
-
-            // Process and write any in-order packets
-            while (received[expected_seq_num]) {
-                fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
-                fflush(fp);
-                received[expected_seq_num] = false;
-                if (buffer[expected_seq_num].last) {
-                    // last packet received, clean up and exit
-                    fclose(fp);
-                    close(listen_sockfd);
-                    close(send_sockfd);
-                    return 0;
+                int wrapped_seqnum = recv_pkt.seqnum % MAX_SEQUENCE;
+                if (!received[wrapped_seqnum]) { // Ignore duplicate packets
+                    buffer[wrapped_seqnum] = recv_pkt;
+                    received[wrapped_seqnum] = true;
+                    printRecv(&recv_pkt);
                 }
-                expected_seq_num = (expected_seq_num + 1) % MAX_SEQUENCE;
+
+                // Sending ACK for every packet received, regardless if it's a duplicate
+                build_packet(&ack_pkt, 0, recv_pkt.seqnum, 0, 1, 0, NULL);
+                sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
+                
+                // Process and write any in-order packets
+                while (received[expected_seq_num]) {
+                    fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
+                    fflush(fp);
+                    received[expected_seq_num] = false;
+                    if (buffer[expected_seq_num].last) {
+                        // last packet received, clean up and exit
+                        fclose(fp);
+                        close(listen_sockfd);
+                        close(send_sockfd);
+                        return 0;
+                    }
+                    expected_seq_num = (expected_seq_num + 1) % MAX_SEQUENCE;
+                }
             }
         } else if (recv_len == 0) {
-            ;
             // Gracefully close connection
+            break;
         } else {
             // An error occurred
             perror("recvfrom failed");
             break;
         }
     }
-
-    
 
     fclose(fp);
     close(listen_sockfd);
