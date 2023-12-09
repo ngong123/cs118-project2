@@ -93,6 +93,7 @@ int main(int argc, char *argv[]) {
     // index i keeps track of the current position of the sending cwnd. 
         for (int i = window_base; i != (window_base + cwnd) % MAX_SEQUENCE; i = (i + 1) % MAX_SEQUENCE) {
             int wrapped_i = i % MAX_SEQUENCE;
+            printf(wrapped_i);
             if (!acked[wrapped_i]) {
                 if (retransmit[wrapped_i]) {
                     // Resend the packet
@@ -127,6 +128,7 @@ int main(int argc, char *argv[]) {
         tv.tv_usec = 40000;
 
         // nathan: retransmission logic of lost packets
+        // FAST RETRANSMIT LOGIC
         if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
             recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
             int ack_index = ack_pkt.acknum % MAX_SEQUENCE;
@@ -143,7 +145,7 @@ int main(int argc, char *argv[]) {
                 } else if (ack_count[ack_index] == 3) { // 3 duplicate ACKs received
                     retransmit[ack_index] = true;
                     // FAST RECOVERY Adjust cwnd and ssthresh for fast recovery
-                    ssthresh = std::max(1, cwnd / 2);
+                    ssthresh = std::max(2, cwnd / 2);
                     cwnd = ssthresh + 3; // inflate the window by the number of duplicate ACKs
                 }
             }
@@ -160,9 +162,10 @@ int main(int argc, char *argv[]) {
                 double time_diff = (current_time.tv_sec - send_time[wrapped_i].tv_sec) * 1000.0;
                 time_diff += (current_time.tv_nsec - send_time[wrapped_i].tv_nsec) / 1000000.0;
                 if (time_diff > TIMEOUT) {
-                    // mark retransmission and adjust cwnd and ssthresh
+                    // adjust cwnd and ssthresh
+                    // SLOW START LOGIC
                     retransmit[wrapped_i] = true;
-                    ssthresh = std::max(1, cwnd / 2);
+                    ssthresh = std::max(2, cwnd / 2);
                     cwnd = 1;
                     slowStart = true;
 
