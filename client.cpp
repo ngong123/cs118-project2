@@ -73,13 +73,14 @@ int main(int argc, char *argv[]) {
     fd_set read_fds;
     
     // nathan: SR and AIMD variables
-    const int MAX_CWND = 1024;
+    const int MAX_CWND = 1048; // original 1048
     int cwnd = 1; // INITIAL CWND WINDOW SIZE INITIALIZED TO 1. 
     int ssthresh = 64; // initial cwnd, initial slow start threshold
     bool acked[MAX_SEQUENCE] = {false};
     struct timespec send_time[MAX_SEQUENCE];
     struct timespec current_time;
-    int window_base = 0;
+    int window_base = 0; // the starting point of the client's window. The seq number of the oldest unacknolwedged packet. once an ACK for a packet with a seq number 
+    // equal to window_base is received, the window_Base moves forward. the total sending window is window_base + cwnd
     bool slowStart = true;
 
     bool retransmit[MAX_SEQUENCE] = {false};
@@ -91,9 +92,15 @@ int main(int argc, char *argv[]) {
     // sending new packets and handling packet retransmissions in cwnd
     // in each iteration, it checks whether a packet neetds to be sent or retransmitted. for new packtes, it reads data from the file, constructs a packet, and sends it. otherwise, it resenhds
     // index i keeps track of the current position of the sending cwnd. 
-        for (int i = window_base; i != (window_base + cwnd) % MAX_SEQUENCE; i = (i + 1) % MAX_SEQUENCE) {
+        int i = window_base;
+        while (true) {
+
             int wrapped_i = i % MAX_SEQUENCE;
-            printf(wrapped_i);
+            printf("Main Loop Start: seq_num=%d, window_base=%d, wrapped_i=%d, cwnd=%d\n", seq_num, window_base, wrapped_i, cwnd);
+
+            if (wrapped_i == (window_base + cwnd) % MAX_SEQUENCE) {
+                break; // Break the loop if it reaches the end of the congestion window
+            }
             if (!acked[wrapped_i]) {
                 if (retransmit[wrapped_i]) {
                     // Resend the packet
@@ -104,11 +111,9 @@ int main(int argc, char *argv[]) {
                     sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
                     printSend(&pkt, 1);  // Indicate retransmission
                     clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]); // Reset the timer for this packet
-
                     retransmit[wrapped_i] = false;  // Reset retransmit flag
-                } else if (i != seq_num) {
-                    // Do nothing, already sent and waiting for ACK
-                } else {
+                } else if (i == seq_num) {
+                    // Logic for sending new packets
                     size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
                     bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
                     build_packet(&pkt, wrapped_i, 0, last_packet, 0, read_bytes, buffer);
@@ -116,10 +121,11 @@ int main(int argc, char *argv[]) {
                     printSend(&pkt, 0);
                     clock_gettime(CLOCK_MONOTONIC, &send_time[wrapped_i]);
                     acked[wrapped_i] = false;
-                    seq_num = (seq_num + 1) % MAX_SEQUENCE;  // Wrap around sequence number. manages overall sequence of packets being sent - handles wrapping logic
-                }
+                    seq_num = (seq_num + 1) % MAX_SEQUENCE; // Increment seq_num for new packet
             }
+            i = (i + 1) % MAX_SEQUENCE;
         }
+        
 
         // nathan: check for ACKs
         FD_ZERO(&read_fds);
@@ -128,7 +134,7 @@ int main(int argc, char *argv[]) {
         tv.tv_usec = 40000;
 
         // nathan: retransmission logic of lost packets
-        // FAST RETRANSMIT LOGIC
+        // FAST RETRANSMIT (triple duplicate ACKs) LOGIC
         if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
             recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
             int ack_index = ack_pkt.acknum % MAX_SEQUENCE;
@@ -143,11 +149,18 @@ int main(int argc, char *argv[]) {
                     }
                 // maintain ack_count. When three duplicate ACKs are received, trigger fast retransmit, and reset sstresh and cwnd
                 } else if (ack_count[ack_index] == 3) { // 3 duplicate ACKs received
-                    retransmit[ack_index] = true;
-                    // FAST RECOVERY Adjust cwnd and ssthresh for fast recovery
+                    // FAST RETRANSMIT (upon 3 dup ACK)
                     ssthresh = std::max(2, cwnd / 2);
+                    retransmit[ack_index] = true;
                     cwnd = ssthresh + 3; // inflate the window by the number of duplicate ACKs
+                } else if (ack_count[ack_index] > 3) {
+                    retransmit[ack_index] = true;
+                    // when 4 duplicate ACKS received, enter FAST RECOVERY
+                    cwnd++;
+                    ssthresh = 2;
                 }
+                
+                
             }
         }
 
@@ -166,7 +179,7 @@ int main(int argc, char *argv[]) {
                     // SLOW START LOGIC
                     retransmit[wrapped_i] = true;
                     ssthresh = std::max(2, cwnd / 2);
-                    cwnd = 1;
+                    cwnd++;
                     slowStart = true;
 
                     // Resend the packet
@@ -186,6 +199,7 @@ int main(int argc, char *argv[]) {
 
 
         // nathan: implementing AIMD congestion control logic
+        // incremending cwnd in slow start 
         if (window_base == seq_num) {  // all packets in the window have been ACKed
             if (slowStart) {
                 cwnd = std::min(cwnd * 2, ssthresh);
@@ -203,4 +217,5 @@ int main(int argc, char *argv[]) {
     close(listen_sockfd);
     close(send_sockfd);
     return 0;
+    }
 }

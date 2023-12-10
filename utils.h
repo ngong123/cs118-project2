@@ -12,10 +12,10 @@ const int SERVER_PORT_TO = 5002;
 const int CLIENT_PORT = 6001;
 const int SERVER_PORT = 6002;
 const int CLIENT_PORT_TO = 5001;
-const int PAYLOAD_SIZE = 1024;
+const int PAYLOAD_SIZE = 1024; // original 1024
 const int WINDOW_SIZE = 5;
 const int TIMEOUT = 1; // nathan: changed timeout to 1 to test congestion control timeout in client
-const int MAX_SEQUENCE = 1024;
+const int MAX_SEQUENCE = 1024; // original 1024
 
 // Packet Layout
 struct packet {

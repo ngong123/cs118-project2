@@ -60,7 +60,7 @@ int main() {
 
     // TODO: Receive file from the client and save it as output.txt
 
-    // nathan: SR logic. MAX_SEQUENCE = 1024 which is the max size of the sliding window. 
+    // nathan: SR logic. MAX_SEQUENCE = 2048 which is the max size of the sliding window. 
     // nathan: cwnd & buffer variable init - for SR 
     bool received[MAX_SEQUENCE] = {false};
     while (true) {
@@ -68,6 +68,7 @@ int main() {
         if (recv_len > 0) {
             if (!recv_pkt.ack) { // ignore packets that are not data packets
                 int wrapped_seqnum = recv_pkt.seqnum % MAX_SEQUENCE;
+                printf("Received Packet: seqnum=%d, wrapped_seqnum=%d\n", recv_pkt.seqnum, wrapped_seqnum);
                 if (!received[wrapped_seqnum]) { // Ignore duplicate packets
                     buffer[wrapped_seqnum] = recv_pkt;
                     received[wrapped_seqnum] = true;
@@ -77,11 +78,13 @@ int main() {
                 // Sending ACK for every packet received regardless if it's a duplicate
                 build_packet(&ack_pkt, 0, recv_pkt.seqnum, 0, 1, 0, NULL);
                 sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
+                printf("Sent ACK: acknum=%d\n", recv_pkt.seqnum);
                 
                 // Process and write any in order packets
                 while (received[expected_seq_num]) {
                     fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
                     fflush(fp);
+                    printf("Processed Packet: expected_seq_num=%d\n", expected_seq_num);
                     received[expected_seq_num] = false;
                     if (buffer[expected_seq_num].last) {
                         // last packet received, clean up and exit
