@@ -104,45 +104,47 @@ int main(int argc, char *argv[]) {
     {
         printf("Main Loop Start: seq_num=%d, window_base=%d, cwnd=%d\n", seq_num, window_base, cwnd);
         // Only read new data if there is space in the window and it's not already sent
-        if (!acked[seq_num] && seq_num < window_base + cwnd) {
+        while (!acked[seq_num] && seq_num < window_base + cwnd) {
             // FOR LOOP 1: SEND NEW PACKETS IN WINDOW VECTOR AND HANDLE ACKS
-            for (unsigned short i = 0; i < WINDOW_SIZE - seq_num; i++) {
-                size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
-                bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
-                build_packet(&pkt, seq_num, 0, last_packet, 0, read_bytes, buffer);
+            unsigned i = 0;
+            unsigned short curr_seq_num = window_base + i;
+            size_t read_bytes = fread(buffer, 1, PAYLOAD_SIZE, fp);
+            bool last_packet = (read_bytes < PAYLOAD_SIZE || feof(fp));
+            build_packet(&packetvec[i], curr_seq_num, 0, last_packet, 0, read_bytes, buffer);
 
-                // Send the packet - first time transmission
-                sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
-                clock_gettime(CLOCK_MONOTONIC, &send_time[seq_num]);
-                printSend(&packetvec[seq_number], 0); 
+            // Send the packet - first time transmission
+            sendto(send_sockfd, &packetvec[i], sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+            clock_gettime(CLOCK_MONOTONIC, &send_time[curr_seq_num]);
+            printSend(&packetvec[i], 0); 
 
-                // wait for ACK
-                FD_SET(listen_sockfd, &read_fds);
-                tv.tv_sec = TIMEOUT; 
-                tv.tv_usec = 40000;
-        
-                    // Use select to check for incoming data
-                if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
-                    ssize_t recv_len = recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
+            // wait for ACK
+            FD_SET(listen_sockfd, &read_fds);
+            tv.tv_sec = TIMEOUT; 
+            tv.tv_usec = 40000;
+    
+                // Use select to check for incoming data
+            if (select(listen_sockfd + 1, &read_fds, NULL, NULL, &tv) > 0) {
+                ssize_t recv_len = recvfrom(listen_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&server_addr_from, &addr_size);
 
-                    if (recv_len > 0 && ack_pkt.ack && ack_pkt.acknum == seq_num) {
-                        acked[seq_num] = true;
-                        window_base = ack_pkt.acknum + 1;
-                        if (ssthresh >= cwnd) { cwnd += 1.0; } // Slow start
-                        else { cwnd += 1.0 / cwnd; } // Congestion avoidance
-                    }
-                }
-                // no data received
-                else {
-                    acked[seq_number] = false;
-                    duplicateAcks[seq_number]++; // increment duplicate ACKs array
-                }
-
-                // Update sequence number
-                seq_num = (seq_num + 1) % MAX_SEQUENCE;
-                        
+                if (recv_len > 0 && ack_pkt.ack && ack_pkt.acknum == curr_seq_num) {
+                    acked[curr_seq_num] = true;
+                    window_base = ack_pkt.acknum + 1;
+                    if (ssthresh >= cwnd) { cwnd += 1.0; } // Slow start
+                    else { cwnd += 1.0 / cwnd; } // Congestion avoidance
                 }
             }
+            // no data received
+            else {
+                acked[curr_seq_num] = false;
+                duplicateAcks[curr_seq_num]++; // increment duplicate ACKs array
+            }
+
+            // Update sequence number
+            seq_num = (seq_num + 1) % MAX_SEQUENCE;
+            i = (i + 1) % MAX_SEQUENCE;
+                    
+            }
+        
             // --Retransmit timed out packets --
         // FOR LOOP 2: CHECK TIMEOUTS; KEEP TIMEOUT COUNT; RETRASMIT timed out packets
         for (unsigned short i = 0; i+window_base < WINDOW_SIZE - seq_num; i++)
@@ -151,7 +153,7 @@ int main(int argc, char *argv[]) {
             if (!acked[seq_num] && timed_out_helper(&send_time[seq_num]))  {
                 if (duplicateAcks[seq_num] < 3) {
                     clock_gettime(CLOCK_MONOTONIC, &send_time[seq_num]);
-                    sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+                    sendto(send_sockfd, &packetvec[i], sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
                     printSend(&packetvec[i], 1); // Resend
                     fast_recovery = true;
                 }
@@ -167,15 +169,13 @@ int main(int argc, char *argv[]) {
         if (duplicateAcks[seq_num]== 3) {
             ssthresh = std::max(cwnd/2, 2);
             cwnd = ssthresh + 3;
-            sendto(send_sockfd, &pkt, sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
+            sendto(send_sockfd, &packetvec[seq_num], sizeof(pkt), 0, (struct sockaddr *)&server_addr_to, addr_size);
         }
         // FAST RECOVERY transition phase - upon each additioanl (4th, 5th) duplicate ACK
         else if (duplicateAcks[seq_num] > 3) {
             cwnd += 1;
         }
-
-        seq_num = (seq_num + 1) % MAX_SEQUENCE;
-        }
+    }
 
 
 
@@ -243,5 +243,6 @@ int main(int argc, char *argv[]) {
     close(send_sockfd);
     return 0;
 
+    
 }
 
