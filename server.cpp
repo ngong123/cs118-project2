@@ -80,7 +80,7 @@ int main() {
                 sendto(send_sockfd, &ack_pkt, sizeof(ack_pkt), 0, (struct sockaddr *)&client_addr_to, addr_size);
                 printf("Sent ACK: acknum=%d\n", recv_pkt.seqnum);
                 
-                // Process and write any in order packets
+                // Process and write in order packets
                 while (received[expected_seq_num]) {
                     fwrite(buffer[expected_seq_num].payload, 1, buffer[expected_seq_num].length, fp);
                     fflush(fp);
